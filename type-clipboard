@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Types the current Wayland clipboard into the focused app via ydotool.
+# Socket is group-gated at /run/ydotoold/socket
+t="$(wl-paste --no-newline 2>/dev/null)" || exit 0
+[ -z "$t" ] && exit 0
+sleep 0.25
+YDOTOOL_SOCKET=${YDOTOOL_SOCKET:-/run/ydotoold/socket} ydotool type --key-delay 5 -- "$t"
