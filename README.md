@@ -40,8 +40,8 @@ Some apps deliberately disable paste. This uses a virtual keyboard at the kernel
 ## Quick start
 
 ```bash
-git clone https://github.com/<you>/type-clipboard-ydotool.git
-cd type-clipboard-ydotool
+git clone https://github.com/djrarky/Type-Clipboard-for-Fedora.git
+cd Type-Clipboard-for-Fedora
 chmod +x install.sh uninstall.sh
 ./install.sh
 # You'll be prompted to reboot (recommended to pick up groups/udev rules)
