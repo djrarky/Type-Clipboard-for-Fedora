@@ -7,7 +7,6 @@ This repo provides:
 - a **hardened systemd service**: `ydotoold.service` (runs as `ydotoold` user)
 - group-gated socket at **`/run/ydotoold/socket`** (only `root` + users in group `ydotool`)
 - **install/uninstall** scripts (with `--purge` and an interactive reboot prompt)
-- optional **Makefile** task runner (`make install`, `make status`, `make logs`, …)
 
 Works on **Fedora + GNOME (Wayland)** using `ydotool` and `/dev/uinput`.
 
@@ -16,16 +15,6 @@ Works on **Fedora + GNOME (Wayland)** using `ydotool` and `/dev/uinput`.
 ## Why not just paste?
 
 Some apps deliberately disable paste. This uses a virtual keyboard at the kernel level to **type** the clipboard, key by key.
-
----
-
-## Features
-
-- ✅ Wayland-friendly (no X11 required)
-- ✅ Group-gated socket (`0660`) — only `ydotool` group members can inject keystrokes
-- ✅ Non-root service account (`ydotoold`) with minimal access to `/dev/uinput`
-- ✅ One-command install/uninstall; optional **purge**
-- ✅ GNOME Keyboard Shortcut friendly
 
 ---
 
@@ -42,7 +31,7 @@ Some apps deliberately disable paste. This uses a virtual keyboard at the kernel
 ```bash
 git clone https://github.com/djrarky/Type-Clipboard-for-Fedora.git
 cd Type-Clipboard-for-Fedora
-chmod +x install.sh uninstall.sh
+chmod u+x install.sh uninstall.sh
 ./install.sh
 # You'll be prompted to reboot (recommended to pick up groups/udev rules)
 ```
@@ -53,13 +42,6 @@ Bind a GNOME shortcut to:
 /home/<you>/.local/bin/type-clipboard
 ```
 
-Usage:
-
-```bash
-wl-copy "Hello from ydotool"
-# focus a text field, press your shortcut → text is typed (no extra newline)
-```
-
 ---
 
 ## What gets installed
@@ -67,7 +49,6 @@ wl-copy "Hello from ydotool"
 ```
 ~/.local/bin/type-clipboard        # user command (types clipboard via ydotool)
 ./ydotoold.service                 # installed to /etc/systemd/system/
-./install.sh, ./uninstall.sh       # helper scripts
 ```
 
 Service details:
@@ -91,7 +72,7 @@ Service details:
 
 What it does:
 
-- Installs **packages** (`ydotool`, `wl-clipboard`)
+- Installs `ydotool`
 - Creates **users/groups**: `ydotoold` (service account), `ydotool` (socket), `uinput` (device)
 - Adds **udev rule** so `/dev/uinput` → `root:uinput 0660`
 - Installs the **systemd unit** and **user script**
@@ -122,7 +103,6 @@ The uninstaller removes the unit(s), runtime sockets, resets systemd’s failed 
 
 - Only **root** and members of **`ydotool`** can access `/run/ydotoold/socket`.
 - The daemon runs as **non-login** user `ydotoold` with only `uinput` capability via group membership.
-- `/run` (tmpfs) is auto-cleaned on boot.
 
 ---
 
@@ -134,7 +114,7 @@ The uninstaller removes the unit(s), runtime sockets, resets systemd’s failed 
 **`Permission denied` on the socket**
 - Ensure your user is in `ydotool`:
   ```bash
-  sudo usermod -aG ydotool "$USER"; newgrp ydotool
+  sudo usermod -aG ydotool "$USER"
   ```
   Confirm your shell session has picked up membership in the 'ydotool' group
   ```bash
@@ -159,12 +139,3 @@ The uninstaller removes the unit(s), runtime sockets, resets systemd’s failed 
 
 **Can I change typing speed?**  
 Yes: edit the script → `ydotool type --key-delay 10 -- "$t"`.
-
-**Use PRIMARY (mouse highlight) instead of clipboard?**  
-Yes: `wl-paste --primary --no-newline`.
-
----
-
-## License
-
-MIT © <you>
