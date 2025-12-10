@@ -1,8 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# --- Run as normal user, not via sudo ---
+if [[ $EUID -eq 0 ]]; then
+  echo "This script must be run as a regular user (without sudo)." >&2
+  echo "Usage: ./install.sh [--no-reboot|--reboot]" >&2
+  exit 1
+fi
+
+# --- Argument parsing ---
 WANT_REBOOT="ask"
-if [[ "${1:-}" == "--no-reboot" ]]; then WANT_REBOOT="no"; fi
+
+for arg in "$@"; do
+  case "$arg" in
+    --no-reboot)
+      WANT_REBOOT="no"
+      ;;
+    --reboot)
+      WANT_REBOOT="yes"
+      ;;
+    *)
+      echo "Unknown argument: $arg" >&2
+      echo "Usage: ./install.sh [--no-reboot|--reboot]" >&2
+      exit 1
+      ;;
+  esac
+done
 
 echo "== Installing required packages =="
 if ! command -v dnf >/dev/null 2>&1; then
@@ -26,6 +49,7 @@ KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="uinput", MODE="0660", OPTIONS+="stat
 RULE
 sudo udevadm control --reload
 sudo modprobe uinput || true
+sudo udevadm trigger --subsystem-match=misc --sysname-match=uinput || true
 ls -l /dev/uinput || true
 
 echo "== Installing user script =="
@@ -39,7 +63,9 @@ sudo systemctl enable --now ydotoold.service
 
 echo "== Waiting for socket =="
 for i in {1..20}; do
-  if sudo test -S /run/ydotoold/socket; then break; fi
+  if sudo test -S /run/ydotoold/socket; then
+    break
+  fi
   sleep 0.2
 done
 sudo ls -l /run/ydotoold/socket || true
@@ -62,11 +88,17 @@ reboot_now() {
 }
 
 if [[ "$WANT_REBOOT" == "ask" ]]; then
-  read -r -p "To complete the installation a reboot is required. Reboot now? [Y/n]: " ans
+  if ! read -r -p "To complete the installation a reboot is required. Reboot now? [Y/n]: " ans; then
+    ans="Y"
+  fi
   ans="${ans:-Y}"
   case "$ans" in
-    [Yy]*) reboot_now ;;
-    *) echo "Okay. Please reboot later to finalize the installation."; ;;
+    [Yy]*)
+      reboot_now
+      ;;
+    *)
+      echo "Okay. Please reboot later to finalize the installation."
+      ;;
   esac
 elif [[ "$WANT_REBOOT" == "yes" ]]; then
   reboot_now
