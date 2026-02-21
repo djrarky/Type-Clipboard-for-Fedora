@@ -25,45 +25,55 @@ for arg in "$@"; do
   esac
 done
 
-echo "== Installing required packages =="
-if ! command -v dnf >/dev/null 2>&1; then
-  echo "This installer expects Fedora (dnf). Aborting." >&2
-  exit 1
-fi
-sudo dnf -y install dnf-plugins-core
-sudo dnf copr enable -y smallcms/dotool
-sudo dnf install -y dotool wl-clipboard
+install_packages() {
+  echo "== Installing required packages =="
+  if ! command -v dnf >/dev/null 2>&1; then
+    echo "This installer expects Fedora (dnf). Aborting." >&2
+    exit 1
+  fi
+  sudo dnf -y install dnf-plugins-core
+  sudo dnf copr enable -y smallcms/dotool
+  sudo dnf install -y dotool wl-clipboard
+}
 
-echo "== Configuring group access for /dev/uinput =="
-sudo groupadd -r uinput  2>/dev/null || true
-sudo usermod -aG uinput "$USER" || true
+configure_uinput_access() {
+  echo "== Configuring group access for /dev/uinput =="
+  sudo groupadd -r uinput 2>/dev/null || true
+  sudo usermod -aG uinput "$USER" || true
 
-echo "== Ensuring /dev/uinput permissions via udev =="
-sudo tee /etc/udev/rules.d/60-uinput-perms.rules >/dev/null <<'RULE'
+  echo "== Ensuring /dev/uinput permissions via udev =="
+  sudo tee /etc/udev/rules.d/60-uinput-perms.rules >/dev/null <<'RULE'
 KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="uinput", MODE="0660", OPTIONS+="static_node=uinput"
 RULE
-sudo udevadm control --reload
-sudo modprobe uinput || true
-sudo udevadm trigger --subsystem-match=misc --sysname-match=uinput || true
-ls -l /dev/uinput || true
+  sudo udevadm control --reload
+  sudo modprobe uinput || true
+  sudo udevadm trigger --subsystem-match=misc --sysname-match=uinput || true
+  ls -l /dev/uinput || true
+}
 
-echo "== Installing user script =="
-install -d -m 0755 "$HOME/.local/bin"
-install -m 0755 ./type-clipboard "$HOME/.local/bin/type-clipboard"
+install_files() {
+  echo "== Installing user script =="
+  install -d -m 0755 "$HOME/.local/bin"
+  install -m 0755 ./type-clipboard "$HOME/.local/bin/type-clipboard"
 
-echo "== Installing and starting user service =="
-install -d -m 0755 "$HOME/.config/systemd/user"
-install -m 0644 ./dotoold.service "$HOME/.config/systemd/user/dotoold.service"
-systemctl --user daemon-reload
-systemctl --user enable --now dotoold.service
+  echo "== Installing and starting user service =="
+  install -d -m 0755 "$HOME/.config/systemd/user"
+  install -m 0644 ./dotoold.service "$HOME/.config/systemd/user/dotoold.service"
+  systemctl --user daemon-reload
+  systemctl --user enable --now dotoold.service
+}
+
+install_packages
+configure_uinput_access
+install_files
 
 echo
-echo "✅ Install complete."
-echo "• Script: $HOME/.local/bin/type-clipboard"
-echo "• Service: dotoold.service (systemd --user)"
-echo "• Client: type-clipboard -> dotoolc"
-echo "• Device access: your user was added to group 'uinput'"
-echo "• Reboot or re-login may be needed for group changes."
+echo "Install complete."
+echo "- Script: $HOME/.local/bin/type-clipboard"
+echo "- Service: dotoold.service (systemd --user)"
+echo "- Client: type-clipboard -> dotoolc"
+echo "- Device access: your user was added to group 'uinput'"
+echo "- Reboot or re-login may be needed for group changes."
 
 reboot_now() {
   echo "Rebooting via systemd…"

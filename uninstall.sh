@@ -31,39 +31,49 @@ done
 
 USER_NAME="$USER"
 
-echo "== Removing user files =="
-
-if [[ -d "$HOME" ]]; then
-  systemctl --user disable --now dotoold.service 2>/dev/null || true
-  rm -f "$HOME/.config/systemd/user/dotoold.service" 2>/dev/null || true
-  systemctl --user daemon-reload 2>/dev/null || true
-  rm -f "$HOME/.local/bin/type-clipboard" 2>/dev/null || true
-  rm -f "${XDG_RUNTIME_DIR:-/run/user/$UID}/dotool-pipe" 2>/dev/null || true
-fi
-
-echo "== Removing packages and COPR repo =="
-if command -v dnf >/dev/null 2>&1; then
-  sudo dnf remove -y dotool wl-clipboard || true
-  sudo dnf copr disable -y smallcms/dotool || true
-  sudo rm -f /etc/yum.repos.d/_copr:copr.fedorainfracloud.org:smallcms:dotool.repo 2>/dev/null || true
-else
-  echo "dnf not found; remove packages and COPR repo manually."
-fi
-
-if "$PURGE"; then
-  echo "== Purge mode: removing udev rule and uinput group =="
-  sudo rm -f /etc/udev/rules.d/60-uinput-perms.rules 2>/dev/null || true
-  sudo udevadm control --reload 2>/dev/null || true
-  sudo udevadm trigger --subsystem-match=misc --sysname-match=uinput 2>/dev/null || true
-  if getent group uinput >/dev/null 2>&1; then
-    sudo gpasswd -d "$USER_NAME" uinput 2>/dev/null || true
+remove_user_files() {
+  echo "== Removing user files =="
+  if [[ -d "$HOME" ]]; then
+    systemctl --user disable --now dotoold.service 2>/dev/null || true
+    rm -f "$HOME/.config/systemd/user/dotoold.service" 2>/dev/null || true
+    systemctl --user daemon-reload 2>/dev/null || true
+    rm -f "$HOME/.local/bin/type-clipboard" 2>/dev/null || true
+    rm -f "${XDG_RUNTIME_DIR:-/run/user/$UID}/dotool-pipe" 2>/dev/null || true
+    rm -f "${XDG_RUNTIME_DIR:-/run/user/$UID}/type-clipboard.layout" 2>/dev/null || true
   fi
-  sudo groupdel uinput 2>/dev/null || true
-else
-  echo "== Kept uinput group + udev rule (use --purge to remove)."
-fi
+}
 
-echo "✅ Uninstall complete."
+remove_packages() {
+  echo "== Removing packages and COPR repo =="
+  if command -v dnf >/dev/null 2>&1; then
+    sudo dnf remove -y dotool wl-clipboard || true
+    sudo dnf copr disable -y smallcms/dotool || true
+    sudo rm -f /etc/yum.repos.d/_copr:copr.fedorainfracloud.org:smallcms:dotool.repo 2>/dev/null || true
+  else
+    echo "dnf not found; remove packages and COPR repo manually."
+  fi
+}
+
+purge_uinput_if_requested() {
+  if "$PURGE"; then
+    echo "== Purge mode: removing udev rule and uinput group =="
+    sudo rm -f /etc/udev/rules.d/60-uinput-perms.rules 2>/dev/null || true
+    sudo udevadm control --reload 2>/dev/null || true
+    sudo udevadm trigger --subsystem-match=misc --sysname-match=uinput 2>/dev/null || true
+    if getent group uinput >/dev/null 2>&1; then
+      sudo gpasswd -d "$USER_NAME" uinput 2>/dev/null || true
+    fi
+    sudo groupdel uinput 2>/dev/null || true
+  else
+    echo "== Kept uinput group + udev rule (use --purge to remove)."
+  fi
+}
+
+remove_user_files
+remove_packages
+purge_uinput_if_requested
+
+echo "Uninstall complete."
 
 reboot_now() {
   echo "Rebooting via systemd…"

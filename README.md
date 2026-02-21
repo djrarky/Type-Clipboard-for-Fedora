@@ -1,6 +1,7 @@
 # Type Clipboard for Fedora (Wayland)
 
 Type your Wayland clipboard into the focused app using `dotoolc`.
+This project is Fedora-specific and assumes `dnf`, `systemd --user`, and IBus.
 
 ## What This Repo Contains
 
@@ -24,6 +25,8 @@ chmod u+x install.sh uninstall.sh
 5. Installs `/etc/udev/rules.d/60-uinput-perms.rules`
 6. Installs and enables `~/.config/systemd/user/dotoold.service`
 7. Installs `~/.local/bin/type-clipboard`
+8. Keeps `dotoold` layout in sync with your active `ibus engine` and restarts the
+   user service only when layout/variant changes
 
 Bind a desktop shortcut to:
 
@@ -60,3 +63,10 @@ systemctl --user status dotoold.service
 id
 ls -l /dev/uinput
 ```
+
+## Notes
+
+- If you edit scripts in this repo, run `./install.sh --no-reboot` to copy the
+  latest `type-clipboard` and service files into your home directory.
+- `type-clipboard` stores the last applied keyboard layout in
+  `${XDG_RUNTIME_DIR}/type-clipboard.layout` to avoid unnecessary service restarts.
