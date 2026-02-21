@@ -1,64 +1,70 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Purpose:
-#  - Read Wayland clipboard
-#  - Type using dotoolc with matching XKB layout/variant
-
 text="$(wl-paste --no-newline 2>/dev/null || true)"
 [[ -z "${text}" ]] && exit 0
 
-# Allow the triggering hotkey to be released and focus to stabilise.
 sleep 0.25
 
 engine="$(ibus engine 2>/dev/null || true)"
-
 layout=""
 variant=""
-
-# Typical IBus XKB engine format: xkb:<layout>:<variant>:<lang>
-# Examples: xkb:gb::eng  |  xkb:us:intl:eng
 if [[ "${engine}" == xkb:* ]]; then
   IFS=':' read -r _ layout variant _lang <<<"${engine}"
 fi
 
-# Keep systemd --user env variables in sync with current layout.
-set_or_unset_user_env() {
-  local name="$1"
-  local value="$2"
-  if [[ -n "${value}" ]]; then
-    systemctl --user set-environment "${name}=${value}"
-  else
-    systemctl --user unset-environment "${name}" || true
-  fi
-}
-
-# dotoold loads XKB env at daemon start. If the IBus XKB layout changed, update
-# systemd --user environment and restart dotoold so dotoolc types with the
-# current keyboard mapping.
 layout_state_file="${XDG_RUNTIME_DIR:-/tmp}/type-clipboard.layout"
-desired_layout_state="${layout}:${variant}"
-current_layout_state="$(<"${layout_state_file}" 2>/dev/null || true)"
-
-if [[ "${engine}" == xkb:* ]] && [[ "${desired_layout_state}" != "${current_layout_state}" ]] && command -v systemctl >/dev/null 2>&1; then
-  set_or_unset_user_env "DOTOOL_XKB_LAYOUT" "${layout}"
-  set_or_unset_user_env "DOTOOL_XKB_VARIANT" "${variant}"
-  systemctl --user restart dotoold.service
-  printf '%s' "${desired_layout_state}" >"${layout_state_file}"
-fi
-
-# dotoolc consumes commands from stdin. To preserve internal newlines in the clipboard,
-# split into lines and insert 'key enter' between lines.
-mapfile -t lines <<<"${text//$'\r'/}"
-
-# Keep client and user service on the same pipe path.
+restarted_or_started=0
 export DOTOOL_PIPE="${DOTOOL_PIPE:-${XDG_RUNTIME_DIR:-/tmp}/dotool-pipe}"
 
-{
+if command -v systemctl >/dev/null 2>&1; then
+  if [[ "${engine}" == xkb:* ]]; then
+    desired_layout_state="${layout}:${variant}"
+    current_layout_state=""
+    if [[ -r "${layout_state_file}" ]]; then
+      current_layout_state="$(<"${layout_state_file}")"
+    fi
+
+    if [[ "${desired_layout_state}" != "${current_layout_state}" ]]; then
+      systemctl --user set-environment "DOTOOL_XKB_LAYOUT=${layout}"
+      if [[ -n "${variant}" ]]; then
+        systemctl --user set-environment "DOTOOL_XKB_VARIANT=${variant}"
+      else
+        systemctl --user unset-environment "DOTOOL_XKB_VARIANT" || true
+      fi
+      systemctl --user restart dotoold.service
+      restarted_or_started=1
+      printf '%s' "${desired_layout_state}" >"${layout_state_file}"
+    fi
+  fi
+
+  if ! systemctl --user is-active --quiet dotoold.service; then
+    systemctl --user start dotoold.service
+    restarted_or_started=1
+  fi
+fi
+
+if [[ "${restarted_or_started}" -eq 1 ]]; then
+  sleep 0.2
+fi
+
+mapfile -t lines <<<"${text//$'\r'/}"
+
+emit_dotool_commands() {
   for i in "${!lines[@]}"; do
     printf 'type %s\n' "${lines[$i]}"
     if (( i < ${#lines[@]} - 1 )); then
       printf 'key enter\n'
     fi
   done
-} | dotoolc
+}
+
+for _ in 1 2 3; do
+  if emit_dotool_commands | dotoolc; then
+    exit 0
+  fi
+
+  sleep 0.2
+done
+
+exit 1
