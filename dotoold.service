@@ -1,0 +1,14 @@
+[Unit]
+Description=dotoold (user daemon for dotoolc)
+ConditionPathExists=/dev/uinput
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment=DOTOOL_PIPE=%t/dotool-pipe
+ExecStart=/usr/bin/dotoold
+Restart=on-failure
+RestartSec=0.2
+
+[Install]
+WantedBy=default.target

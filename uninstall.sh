@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- Run as normal user, not via sudo ---
 if [[ $EUID -eq 0 ]]; then
   echo "This script must be run as a regular user (without sudo)." >&2
   echo "Usage: ./uninstall.sh [--purge] [--no-reboot|--reboot]" >&2
   exit 1
 fi
 
-# --- Argument parsing ---
 PURGE=false
 WANT_REBOOT="ask"
 
@@ -31,85 +29,49 @@ for arg in "$@"; do
   esac
 done
 
-# "Real" user is the one running the script
 USER_NAME="$USER"
-USER_HOME="$(getent passwd "$USER_NAME" | cut -d: -f6)"
 
-echo "== Stopping and removing systemd services =="
-sudo systemctl disable --now ydotoold.service 2>/dev/null || true
-sudo systemctl disable --now ydotoold-basic.service 2>/dev/null || true
-sudo rm -f /etc/systemd/system/ydotoold.service /etc/systemd/system/ydotoold-basic.service
-sudo systemctl daemon-reload
-sudo systemctl reset-failed ydotoold.service 2>/dev/null || true
-sudo systemctl reset-failed ydotoold-basic.service 2>/dev/null || true
+echo "== Removing user files =="
 
-# User unit cleanup (if it ever existed)
-if [[ -n "${USER_HOME:-}" && -d "$USER_HOME" ]]; then
-  sudo runuser -l "$USER_NAME" -c 'systemctl --user disable --now ydotoold.service' 2>/dev/null || true
-  sudo rm -f "$USER_HOME/.config/systemd/user/ydotoold.service" 2>/dev/null || true
-  sudo runuser -l "$USER_NAME" -c 'systemctl --user daemon-reload' 2>/dev/null || true
+if [[ -d "$HOME" ]]; then
+  systemctl --user disable --now dotoold.service 2>/dev/null || true
+  rm -f "$HOME/.config/systemd/user/dotoold.service" 2>/dev/null || true
+  systemctl --user daemon-reload 2>/dev/null || true
+  rm -f "$HOME/.local/bin/type-clipboard" 2>/dev/null || true
+  rm -f "${XDG_RUNTIME_DIR:-/run/user/$UID}/dotool-pipe" 2>/dev/null || true
 fi
 
-echo "== Removing runtime sockets/dirs and script =="
-sudo pkill ydotoold 2>/dev/null || true
-sudo rm -rf /run/ydotoold /tmp/.ydotool_socket
-
-if [[ -n "${USER_HOME:-}" && -d "$USER_HOME" ]]; then
-  rm -f "$USER_HOME/.local/bin/type-clipboard" 2>/dev/null || true
+echo "== Removing packages and COPR repo =="
+if command -v dnf >/dev/null 2>&1; then
+  sudo dnf remove -y dotool wl-clipboard || true
+  sudo dnf copr disable -y smallcms/dotool || true
+  sudo rm -f /etc/yum.repos.d/_copr:copr.fedorainfracloud.org:smallcms:dotool.repo 2>/dev/null || true
+else
+  echo "dnf not found; remove packages and COPR repo manually."
 fi
 
 if "$PURGE"; then
-  echo "== Purge mode: removing udev rule, users, and groups (if possible) =="
+  echo "== Purge mode: removing udev rule and uinput group =="
   sudo rm -f /etc/udev/rules.d/60-uinput-perms.rules 2>/dev/null || true
   sudo udevadm control --reload 2>/dev/null || true
   sudo udevadm trigger --subsystem-match=misc --sysname-match=uinput 2>/dev/null || true
-
-  if id -u ydotoold >/dev/null 2>&1; then
-    sudo userdel ydotoold 2>/dev/null || true
+  if getent group uinput >/dev/null 2>&1; then
+    sudo gpasswd -d "$USER_NAME" uinput 2>/dev/null || true
   fi
-  sudo groupdel ydotool  2>/dev/null || true
-  sudo groupdel uinput   2>/dev/null || true
-
-  echo "== (Optional) remove 'ydotool' package =="
-  if ! command -v dnf >/dev/null 2>&1; then
-    echo "dnf not found; if you wish, remove 'ydotool' manually."
-  else
-    if rpm -q ydotool >/dev/null 2>&1; then
-      if ! read -r -p "Remove 'ydotool' package via dnf? [y/N]: " ans; then
-        ans="N"
-      fi
-      ans="${ans:-N}"
-      case "$ans" in
-        [Yy]*)
-          sudo dnf -y remove ydotool
-          ;;
-        *)
-          echo "Keeping 'ydotool' package installed."
-          ;;
-      esac
-    else
-      echo "'ydotool' package is not installed (nothing to remove)."
-    fi
-  fi
+  sudo groupdel uinput 2>/dev/null || true
 else
-  echo "== Kept groups and udev rule. Use '--purge' to remove them as well."
+  echo "== Kept uinput group + udev rule (use --purge to remove)."
 fi
 
 echo "✅ Uninstall complete."
 
-# ---------- Reboot prompt ----------
 reboot_now() {
-  if command -v gnome-session-quit >/dev/null 2>&1 && [[ -n "${XDG_SESSION_TYPE:-}" ]]; then
-    echo "Rebooting via GNOME…"
-    gnome-session-quit --reboot --no-prompt
-  else
-    echo "Rebooting via systemd…"
-    sudo systemctl reboot
-  fi
+  echo "Rebooting via systemd…"
+  sudo systemctl reboot
 }
 
 read_reboot() {
-  if ! read -r -p "A reboot is recommended to fully unload drivers and clear inhibitors. Reboot now? [Y/n]: " ans; then
+  if ! read -r -p "Reboot now? [Y/n]: " ans; then
     ans="Y"
   fi
   ans="${ans:-Y}"

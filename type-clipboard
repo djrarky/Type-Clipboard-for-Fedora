@@ -1,7 +1,43 @@
 #!/usr/bin/env bash
-# Types the current Wayland clipboard into the focused app via ydotool.
-# Socket is group-gated at /run/ydotoold/socket
-t="$(wl-paste --no-newline 2>/dev/null)" || exit 0
-[ -z "$t" ] && exit 0
+set -euo pipefail
+
+# Purpose:
+#  - Read Wayland clipboard
+#  - Type using dotoolc with matching XKB layout/variant
+
+text="$(wl-paste --no-newline 2>/dev/null || true)"
+[[ -z "${text}" ]] && exit 0
+
+# Allow the triggering hotkey to be released and focus to stabilise.
 sleep 0.25
-YDOTOOL_SOCKET=${YDOTOOL_SOCKET:-/run/ydotoold/socket} ydotool type --key-delay 5 -- "$t"
+
+engine="$(ibus engine 2>/dev/null || true)"
+
+layout=""
+variant=""
+
+# Typical IBus XKB engine format: xkb:<layout>:<variant>:<lang>
+# Examples: xkb:gb::eng  |  xkb:us:intl:eng
+if [[ "${engine}" == xkb:* ]]; then
+  IFS=':' read -r _ layout variant _lang <<<"${engine}"
+fi
+
+# Export layout/variant for dotoold/dotoolc XKB mapping (if known).
+[[ -n "${layout}"  ]] && export DOTOOL_XKB_LAYOUT="${layout}"
+[[ -n "${variant}" ]] && export DOTOOL_XKB_VARIANT="${variant}"
+
+# dotoolc consumes commands from stdin. To preserve internal newlines in the clipboard,
+# split into lines and insert 'key enter' between lines.
+mapfile -t lines <<<"${text//$'\r'/}"
+
+# Keep client and user service on the same pipe path.
+export DOTOOL_PIPE="${DOTOOL_PIPE:-${XDG_RUNTIME_DIR:-/tmp}/dotool-pipe}"
+
+{
+  for i in "${!lines[@]}"; do
+    printf 'type %s\n' "${lines[$i]}"
+    if (( i < ${#lines[@]} - 1 )); then
+      printf 'key enter\n'
+    fi
+  done
+} | dotoolc
