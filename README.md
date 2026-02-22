@@ -1,3 +1,5 @@
+# This branch is no-longer maintained
+
 # Type Clipboard for Fedora (Wayland/GNOME)
 
 Type whatever’s in your **Wayland** clipboard into the focused app — even apps that block paste.
