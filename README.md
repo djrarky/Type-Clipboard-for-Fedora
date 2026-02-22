@@ -1,3 +1,5 @@
+Info: this was made with the assistance of AI (codex)
+
 # Type Clipboard for Fedora (Wayland)
 
 Type your Wayland clipboard into the focused app using `dotoolc`.
