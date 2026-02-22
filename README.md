@@ -30,7 +30,7 @@ chmod u+x install.sh uninstall.sh
 8. Keeps `dotoold` layout in sync with your active `ibus engine` and restarts the
    user service only when layout/variant changes
 
-Bind a desktop shortcut to:
+Bind a desktop/keyboard shortcut to:
 
 ```text
 /home/<you>/.local/bin/type-clipboard
