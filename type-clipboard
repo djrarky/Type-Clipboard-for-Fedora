@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+submission_active=false
+
+check_cancelled() {
+  if [[ "${submission_active:-false}" == true ]]; then
+    local current_generation=''
+    [[ ! -f "$cancel_file" ]] || current_generation="$(<"$cancel_file")"
+    if [[ "$submission_generation" != "$current_generation" ]]; then
+      # A start/restart may have raced with cancellation. No other submission
+      # can start while we hold the writer lock, so stop that daemon too.
+      timeout 5 systemctl --user stop dotoold.service 2>/dev/null || true
+      exit 130
+    fi
+  fi
+}
+
+fail() {
+  check_cancelled
+  printf 'type-clipboard: %s\n' "$*" >&2
+  if command -v notify-send >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+    timeout 2 notify-send --app-name=type-clipboard 'Type Clipboard' "$*" 2>/dev/null || true
+  fi
+  exit 1
+}
+
+preserve_trailing_newlines=false
+cancel_requested=false
+case "${1:-}" in
+  --cancel) cancel_requested=true; shift ;;
+  --preserve-trailing-newlines) preserve_trailing_newlines=true; shift ;;
+  -h|--help)
+    echo 'Usage: type-clipboard [--preserve-trailing-newlines | --cancel]'
+    echo 'By default, trailing newlines are omitted to avoid a final Enter press.'
+    echo '--cancel stops current and queued typing without reading the clipboard.'
+    exit 0
+    ;;
+esac
+[[ $# -eq 0 ]] || fail 'Usage: type-clipboard [--preserve-trailing-newlines | --cancel]'
+
+dependencies=(systemctl timeout)
+if ! "$cancel_requested"; then
+  dependencies+=(wl-paste dotoolc ibus flock)
+fi
+for dependency in "${dependencies[@]}"; do
+  command -v "$dependency" >/dev/null 2>&1 || fail "Missing dependency: $dependency"
+done
+
+# Never put the FIFO, lock or clipboard data in a shared /tmp directory.
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$UID}"
+[[ -d "$runtime_dir" && -O "$runtime_dir" && -w "$runtime_dir" ]] ||
+  fail 'A writable, user-owned XDG_RUNTIME_DIR is required. Run this in your desktop session.'
+export DOTOOL_PIPE="$runtime_dir/dotool-pipe"
+layout_file="$runtime_dir/type-clipboard.layout.env"
+cancel_file="$runtime_dir/type-clipboard.cancel"
+
+if "$cancel_requested"; then
+  # Do not acquire the writer lock: a blocked writer must be cancellable. Publish
+  # a new generation atomically before stopping the daemon and discarding its FIFO.
+  cancel_tmp="$(mktemp "$runtime_dir/type-clipboard.cancel.XXXXXX")"
+  trap 'rm -f -- "$cancel_tmp"' EXIT
+  printf '%s\n' "$cancel_tmp" >"$cancel_tmp"
+  mv -f -- "$cancel_tmp" "$cancel_file"
+  timeout 5 systemctl --user stop dotoold.service || fail 'Could not stop clipboard typing.'
+  exit 0
+fi
+
+exec {lock_fd}>"$runtime_dir/type-clipboard.lock"
+flock -n "$lock_fd" || fail 'Another clipboard submission is still in progress.'
+submission_generation=''
+[[ ! -f "$cancel_file" ]] || submission_generation="$(<"$cancel_file")"
+submission_active=true
+
+clipboard_file=''
+layout_tmp=''
+cleanup() {
+  [[ -z "$clipboard_file" ]] || rm -f -- "$clipboard_file"
+  [[ -z "$layout_tmp" ]] || rm -f -- "$layout_tmp"
+  return 0
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+read_clipboard() {
+  local offered_types mime plain_type='' utf8_type='' legacy_type='' read_ok=true
+  offered_types="$(timeout 5 wl-paste --list-types 2>/dev/null)" ||
+    fail 'Could not inspect clipboard formats (empty, unavailable, or timed out).'
+  while IFS= read -r mime; do
+    case "${mime,,}" in
+      image/*|application/x-qt-image)
+        fail 'Clipboard contains an image; nothing was typed.'
+        ;;
+      text/plain\;charset=utf-8|text/plain\;\ charset=utf-8) utf8_type="$mime" ;;
+      text/plain) plain_type="$mime" ;;
+      utf8_string) legacy_type="$mime" ;;
+    esac
+  done <<<"$offered_types"
+  mime="${utf8_type:-${plain_type:-$legacy_type}}"
+  [[ -n "$mime" ]] || fail 'Clipboard does not offer plain text; nothing was typed.'
+
+  clipboard_file="$(mktemp "$runtime_dir/type-clipboard.text.XXXXXX")"
+  # Request an advertised plain-text format explicitly, never a generic fallback.
+  # Read at most the size limit plus one byte, including from a mislabelled source.
+  timeout 5 bash -o pipefail -c 'wl-paste --type "$1" --no-newline | head -c 65537' \
+    -- "$mime" >"$clipboard_file" 2>/dev/null || read_ok=false
+  (( $(wc -c <"$clipboard_file") <= 65536 )) || fail 'Clipboard text exceeds the 64 KiB limit.'
+  "$read_ok" || fail 'Could not read clipboard text (empty, non-text, unavailable, or timed out).'
+
+  # Unlike command substitution, read preserves trailing newlines. A successful
+  # read with an empty delimiter means a NUL was encountered, which is not text.
+  text=''
+  if IFS= read -r -d '' text <"$clipboard_file"; then
+    fail 'Clipboard text contains a NUL byte.'
+  fi
+  rm -f -- "$clipboard_file"
+  clipboard_file=''
+
+  text="${text//$'\r\n'/$'\n'}"
+  [[ "$text" != *$'\r'* ]] || fail 'Clipboard text contains a standalone carriage return.'
+  if ! "$preserve_trailing_newlines"; then
+    while [[ "$text" == *$'\n' ]]; do
+      text="${text%$'\n'}"
+    done
+  fi
+}
+
+ensure_daemon() {
+  local engine layout variant desired_layout current_layout=''
+  check_cancelled
+  engine="$(timeout 5 ibus engine 2>/dev/null)" || fail 'Could not determine the active IBus keyboard layout.'
+  check_cancelled
+  if [[ "$engine" =~ ^xkb:([[:alnum:]_-]+):([[:alnum:]_-]*):[^:]+$ ]]; then
+    layout="${BASH_REMATCH[1]}"
+    variant="${BASH_REMATCH[2]}"
+  else
+    fail 'The active input method is not an IBus XKB keyboard layout.'
+  fi
+
+  desired_layout="$(printf 'DOTOOL_XKB_LAYOUT=%s\nDOTOOL_XKB_VARIANT=%s' "$layout" "$variant")"
+  [[ ! -f "$layout_file" ]] || current_layout="$(<"$layout_file")"
+  if [[ "$desired_layout" != "$current_layout" ]]; then
+    layout_tmp="$(mktemp "$runtime_dir/type-clipboard.layout.XXXXXX")"
+    printf '%s\n' "$desired_layout" >"$layout_tmp"
+    mv -f -- "$layout_tmp" "$layout_file"
+    layout_tmp=''
+    if ! timeout 10 systemctl --user restart dotoold.service; then
+      # A failed restart must be retried next time, even if an old daemon survived.
+      rm -f -- "$layout_file"
+      fail 'Could not restart dotoold.service for the active keyboard layout.'
+    fi
+  elif ! timeout 5 systemctl --user is-active --quiet dotoold.service; then
+    timeout 10 systemctl --user start dotoold.service || fail 'Could not start dotoold.service.'
+  fi
+  check_cancelled
+
+  # Only retry an empty readiness probe. Payload writes must never be replayed:
+  # a failed writer may already have delivered part of the text.
+  if ! timeout 5 bash -c 'until dotoolc </dev/null 2>/dev/null; do sleep 0.1; done'; then
+    fail 'dotoold did not become ready. Check systemctl --user status dotoold.service.'
+  fi
+}
+
+emit_line() {
+  local line="$1" offset
+  # Keep each protocol line comfortably below dotool's input buffer limit.
+  for (( offset=0; offset<${#line}; offset+=512 )); do
+    printf 'type %s\n' "${line:offset:512}"
+  done
+}
+
+emit_commands() {
+  local line
+  while true; do
+    if IFS= read -r line; then
+      emit_line "$line"
+      printf 'key enter\n'
+    else
+      emit_line "$line"
+      break
+    fi
+  done < <(printf '%s' "$text")
+}
+
+read_clipboard
+check_cancelled
+[[ -n "$text" ]] || exit 0
+
+# Allow the physical shortcut modifiers to be released before typing starts.
+sleep 0.25
+ensure_daemon
+check_cancelled
+if ! emit_commands | timeout 15m dotoolc; then
+  fail 'Sending failed or timed out. Some text may have been typed; it was not retried.'
+fi
+check_cancelled

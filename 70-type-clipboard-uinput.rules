@@ -1,0 +1,2 @@
+# Type Clipboard for Fedora: grant the active local session access before 73-seat-late.rules.
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"
