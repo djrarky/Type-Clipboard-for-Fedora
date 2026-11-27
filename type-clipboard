@@ -127,15 +127,29 @@ read_clipboard() {
 }
 
 ensure_daemon() {
-  local engine layout variant desired_layout current_layout=''
+  local engine layout variant desired_layout current_layout='' sources=''
+  local single_xkb_source="^\[\('xkb', '([[:alnum:]_-]+)(\+([[:alnum:]_-]+))?'\)\]$"
   check_cancelled
-  engine="$(timeout 5 ibus engine 2>/dev/null)" || fail 'Could not determine the active IBus keyboard layout.'
+  # IBus can report US even when GNOME uses a different XKB layout. With one
+  # configured input source, GNOME's setting is unambiguous and takes priority.
+  if command -v gsettings >/dev/null 2>&1; then
+    sources="$(timeout 5 gsettings get org.gnome.desktop.input-sources sources 2>/dev/null)" || sources=''
+  fi
   check_cancelled
-  if [[ "$engine" =~ ^xkb:([[:alnum:]_-]+):([[:alnum:]_-]*):[^:]+$ ]]; then
+  if [[ "$sources" =~ $single_xkb_source ]]; then
     layout="${BASH_REMATCH[1]}"
-    variant="${BASH_REMATCH[2]}"
+    variant="${BASH_REMATCH[3]:-}"
   else
-    fail 'The active input method is not an IBus XKB keyboard layout.'
+    # A list of layouts does not identify the selected one; keep using IBus
+    # when there are multiple sources or GNOME settings are unavailable.
+    engine="$(timeout 5 ibus engine 2>/dev/null)" || fail 'Could not determine the active IBus keyboard layout.'
+    check_cancelled
+    if [[ "$engine" =~ ^xkb:([[:alnum:]_-]+):([[:alnum:]_-]*):[^:]+$ ]]; then
+      layout="${BASH_REMATCH[1]}"
+      variant="${BASH_REMATCH[2]}"
+    else
+      fail 'The active input method is not an IBus XKB keyboard layout.'
+    fi
   fi
 
   desired_layout="$(printf 'DOTOOL_XKB_LAYOUT=%s\nDOTOOL_XKB_VARIANT=%s' "$layout" "$variant")"

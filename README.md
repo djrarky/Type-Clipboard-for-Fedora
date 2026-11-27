@@ -3,7 +3,7 @@
 Type the text on your clipboard into the focused application as keystrokes. This
 is useful for remote consoles and fields that do not accept ordinary paste.
 
-Designed for **Fedora with GNOME on Wayland**, using an IBus XKB keyboard layout.
+Designed for **Fedora with GNOME on Wayland**, using an XKB keyboard layout.
 Images are rejected, and you can cancel typing at any time.
 
 ## Install
@@ -127,8 +127,10 @@ failure without retrying the text, so check the destination before trying again.
 <details>
 <summary>How it works and installed files</summary>
 
-The command reads plain text with `wl-paste`, checks the active keyboard layout
-with IBus, and sends commands through `dotoolc` to the persistent `dotoold` service.
+The command reads plain text with `wl-paste` and sends commands through `dotoolc`
+to the persistent `dotoold` service. If GNOME has one XKB input source configured,
+that layout is used directly; otherwise, the command checks the active IBus
+engine. This avoids a keyboard layout mismatch when IBus reports US despite GNOME using another locale.
 A successful submission means the daemon received the commands; typing may still
 be in progress after the submitting command exits.
 
